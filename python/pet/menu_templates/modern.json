@@ -1,0 +1,13 @@
+{
+  "id": "modern",
+  "name": "现代菜单",
+  "groups": [
+    {"id": "interaction", "items": ["ojingjing", "chat"]},
+    {"id": "playback", "items": ["animations_hub", "character"]},
+    {"id": "functions", "items": ["playback_speed", "size", "return_corner", "no_move", "on_top", "autostart"]},
+    {"id": "tools", "items": ["agent_launch"]},
+    {"id": "settings", "items": ["modern_settings"]},
+    {"id": "exit", "items": ["quit"]}
+  ]
+}
+

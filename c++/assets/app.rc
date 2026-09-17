@@ -1,0 +1,2 @@
+// Windows 应用图标：与 Python 版共用 assets/icon.ico（资源 ID 最小者为程序图标）
+IDI_ICON1 ICON "icon.ico"

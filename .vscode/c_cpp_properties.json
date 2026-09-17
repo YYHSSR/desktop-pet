@@ -1,0 +1,22 @@
+{
+    "configurations": [
+        {
+            "name": "Win32-GCC",
+            "includePath": [
+                "${workspaceFolder}/c++实现/src",
+                "${workspaceFolder}/c++实现/src/**"
+            ],
+            "defines": [
+                "_DEBUG",
+                "UNICODE",
+                "_UNICODE"
+            ],
+            "compilerPath": "E:/msys/msys/mingw64/bin/g++.exe",
+            "cStandard": "c17",
+            "cppStandard": "c++20",
+            "intelliSenseMode": "windows-gcc-x64",
+            "configurationProvider": "ms-vscode.cmake-tools"
+        }
+    ],
+    "version": 4
+}
