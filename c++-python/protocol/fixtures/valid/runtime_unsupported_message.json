@@ -1,0 +1,13 @@
+{
+  "protocol_version": 1,
+  "session_id": "sess-20260918-0001",
+  "seq": 4,
+  "kind": "response",
+  "type": "runtime.unsupported_message",
+  "pet_id": "main",
+  "request_id": "host-unknown-1",
+  "payload": {
+    "reason": "unknown_type",
+    "detail": "agent.magic"
+  }
+}

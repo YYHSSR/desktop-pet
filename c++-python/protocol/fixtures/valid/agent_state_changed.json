@@ -1,0 +1,16 @@
+{
+  "protocol_version": 1,
+  "session_id": "sess-20260918-0001",
+  "seq": 1,
+  "kind": "event",
+  "type": "agent.state_changed",
+  "pet_id": "main",
+  "request_id": null,
+  "payload": {
+    "agent": "myagent",
+    "state": "working",
+    "generation": 7,
+    "config_revision": 12,
+    "tool": "Edit"
+  }
+}

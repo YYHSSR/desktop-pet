@@ -1,0 +1,13 @@
+{
+  "protocol_version": 1,
+  "session_id": "sess-20260918-0001",
+  "seq": 3,
+  "kind": "response",
+  "type": "behavior.result",
+  "pet_id": "main",
+  "request_id": "prop-myagent-1",
+  "payload": {
+    "status": "rejected",
+    "reason": "interaction_locked"
+  }
+}

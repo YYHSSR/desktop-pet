@@ -1,0 +1,14 @@
+{
+  "protocol_version": 1,
+  "session_id": "sess-20260918-0001",
+  "seq": 0,
+  "kind": "response",
+  "type": "runtime.ready",
+  "pet_id": "main",
+  "request_id": "host-hello-1",
+  "payload": {
+    "worker_version": "0.1.0",
+    "capabilities": ["agent.custom"],
+    "pid": 12345
+  }
+}

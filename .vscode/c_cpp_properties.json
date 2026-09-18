@@ -3,8 +3,8 @@
         {
             "name": "Win32-GCC",
             "includePath": [
-                "${workspaceFolder}/c++实现/src",
-                "${workspaceFolder}/c++实现/src/**"
+                "${workspaceFolder}/c++-python/host/src",
+                "${workspaceFolder}/c++-python/host/src/**"
             ],
             "defines": [
                 "_DEBUG",

@@ -1,8 +1,8 @@
-# C++ Build & Distribution
-c++/build/
-c++/dist/
+# ===== Build & Distribution =====
 build/
 dist/
+dist-onedir/
+build-onedir/
 *.obj
 *.o
 *.a
@@ -18,21 +18,10 @@ Makefile
 .ninja_log
 .ninja_deps
 
-# Pre-compiled / Downloaded Large Executables
-c++/ffmpeg.exe
+# Large executables (shipped via packaging script)
 ffmpeg.exe
 
-# Python Build & Distribution
-python/dist-onedir/
-python/build-onedir/
-python/dist/
-python/build/
-dist-onedir/
-build-onedir/
-packaging/build_variant.py
-tests/_tmp_cfg/
-
-# Python Cache & Virtual Environments
+# ===== Python =====
 __pycache__/
 *.py[cod]
 *$py.class
@@ -43,12 +32,10 @@ __pycache__/
 venv/
 ENV/
 *.egg-info/
+packaging/build_variant.py
+tests/_tmp_cfg/
 
-# AI Governance Temporary Files
-AI/temp/
-AI/extractions/temp/
-
-# Logs & OS Specific
+# ===== Logs & OS =====
 *.log
 *.tmp
 Thumbs.db

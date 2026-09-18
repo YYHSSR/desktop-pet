@@ -1,0 +1,434 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://desktop-pet.local/protocol/envelope.schema.json",
+  "title": "Desktop Pet C++/Python 桥接协议",
+  "description": "QProcess stdin/stdout 上的 UTF-8 JSON Lines 协议。每行一个完整 envelope 对象，字符串内换行必须转义。C++ 宿主为唯一配置写者，Python Worker 只读快照。字段命名在 JSON 中统一使用 snake_case。",
+  "x-protocol-version": 1,
+  "x-limits": {
+    "max_message_bytes": 65536,
+    "max_outbound_queue_messages": 256,
+    "max_outbound_queue_bytes": 1048576,
+    "handshake_timeout_ms": 5000,
+    "heartbeat_interval_ms": 2000,
+    "heartbeat_miss_threshold": 3,
+    "restart_backoff_ms": [1000, 2000, 4000],
+    "restart_window_ms": 60000,
+    "max_restarts_per_window": 3,
+    "shutdown_grace_ms": 2000,
+    "default_proposal_ttl_ms": 2000
+  },
+  "$defs": {
+    "protocol_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "主版本。不匹配时接收方禁用增强能力并降级，但不得崩溃。"
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9_.:-]+$",
+      "description": "每次 Worker 重启生成新值。旧 session 的消息直接忽略。"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "每个 session、每个发送方向单调递增。重复 seq 视为重放并忽略。"
+    },
+    "pet_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "description": "首期为固定值 main；协议保留以便未来多宠物共享 Worker。"
+    },
+    "request_id": {
+      "type": ["string", "null"],
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9_.:-]+$",
+      "description": "request / response 必须为非空字符串；event 必须为 null。"
+    },
+    "agent_key": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,31}$",
+      "description": "与现有 agent_link 配置键一致，例如 custom_agents 中的键。"
+    },
+    "agent_state": {
+      "type": "string",
+      "enum": ["idle", "thinking", "working", "attention", "sleeping", "error"],
+      "description": "复用现有业务语义，不得引入第二套状态词汇。"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "宿主代次。角色切换、隐藏/恢复、交互锁变化时递增；Python 必须回传生成建议时使用的值。"
+    },
+    "config_revision": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "配置 revision。不匹配时返回冲突并附最新快照，Python 不得覆盖新设置。"
+    },
+    "action_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "稳定语义标识，形如 '<folder>/<动作名>'；system/idle 表示回到待机。C++ 负责解析为本地动画路径并校验白名单。"
+    },
+    "bubble": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["text"],
+      "properties": {
+        "text": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "important": { "type": "boolean", "default": false },
+        "duration_ms": { "type": "integer", "minimum": 500, "maximum": 20000, "default": 4500 }
+      }
+    },
+    "envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol_version", "session_id", "seq", "kind", "type", "pet_id", "request_id", "payload"],
+      "properties": {
+        "protocol_version": { "$ref": "#/$defs/protocol_version" },
+        "session_id": { "$ref": "#/$defs/session_id" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "kind": { "type": "string", "enum": ["request", "response", "event"] },
+        "type": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$" },
+        "pet_id": { "$ref": "#/$defs/pet_id" },
+        "request_id": { "$ref": "#/$defs/request_id" },
+        "payload": { "type": "object" }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "enum": ["request", "response"] } } },
+          "then": {
+            "properties": {
+              "request_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[A-Za-z0-9_.:-]+$"
+              }
+            }
+          }
+        },
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "event" } } },
+          "then": { "properties": { "request_id": { "type": "null" } } }
+        }
+      ]
+    },
+    "runtime_hello": {
+      "description": "C++ → Python，握手请求。",
+      "allOf": [{ "$ref": "#/$defs/envelope" }],
+      "properties": {
+        "kind": { "const": "request" },
+        "type": { "const": "runtime.hello" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["host_version", "required_capabilities"],
+          "properties": {
+            "host_version": { "type": "string", "maxLength": 64 },
+            "required_capabilities": {
+              "type": "array",
+              "items": { "type": "string", "maxLength": 32 },
+              "description": "宿主必需能力；Worker 未全部提供时宿主降级为 native。"
+            }
+          }
+        }
+      }
+    },
+    "runtime_ready": {
+      "description": "Python → C++，握手应答与能力回报。",
+      "allOf": [{ "$ref": "#/$defs/envelope" }],
+      "properties": {
+        "kind": { "const": "response" },
+        "type": { "const": "runtime.ready" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["worker_version", "capabilities"],
+          "properties": {
+            "worker_version": { "type": "string", "maxLength": 64 },
+            "capabilities": { "type": "array", "items": { "type": "string", "maxLength": 32 } },
+            "pid": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+    "config_snapshot": {
+      "description": "C++ → Python，完整只读配置快照。",
+      "allOf": [{ "$ref": "#/$defs/envelope" }],
+      "properties": {
+        "kind": { "const": "event" },
+        "type": { "const": "config.snapshot" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["revision", "agent_backend", "agents"],
+          "properties": {
+            "revision": { "$ref": "#/$defs/config_revision" },
+            "agent_backend": { "type": "string", "enum": ["native", "python"] },
+            "policy": {
+              "type": "object",
+              "description": "业务策略参数（节流/通知开关）。省略即用 Worker 默认值，默认值与旧版 agent_link 行为一致。",
+              "additionalProperties": false,
+              "properties": {
+                "notify_state": { "type": "boolean", "description": "开始干活气泡，默认 false" },
+                "notify_done": { "type": "boolean", "description": "完成通知气泡，默认 true" },
+                "notify_activity": { "type": "boolean", "description": "过程汇报气泡，默认 false" },
+                "min_interval_ms": { "type": "integer", "minimum": 0, "maximum": 60000 },
+                "activity_interval_ms": { "type": "integer", "minimum": 0, "maximum": 600000 },
+                "activity_global_min_ms": { "type": "integer", "minimum": 0, "maximum": 600000 },
+                "activity_same_label_ms": { "type": "integer", "minimum": 0, "maximum": 600000 },
+                "done_confirm_ms": { "type": "integer", "minimum": 0, "maximum": 10000 },
+                "done_cooldown_ms": { "type": "integer", "minimum": 0, "maximum": 600000 }
+              }
+            },
+            "agents": {
+              "type": "object",
+              "description": "键为 agent_key；仅包含已启用且由 Worker 负责的 Agent。",
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["enabled", "kind"],
+                "properties": {
+                  "enabled": { "type": "boolean" },
+                  "kind": { "type": "string", "enum": ["custom", "antigravity", "chatgpt"] },
+                  "display_name": { "type": "string", "maxLength": 64 },
+                  "events_path": {
+                    "type": "string",
+                    "maxLength": 1024,
+                    "description": "统一协议 JSONL 路径，允许以 ~ 开头。仅 custom 类型出现。"
+                  },
+                  "busy_agents": {
+                    "type": "array",
+                    "items": { "type": "string", "maxLength": 64 },
+                    "description": "用于前台进程归属判断的进程名/标题关键词。"
+                  },
+                  "thinking_text": { "type": "string", "maxLength": 256 }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "pet_snapshot": {
+      "description": "C++ → Python，宠物状态快照。Python 应用后才允许输出行为建议。",
+      "allOf": [{ "$ref": "#/$defs/envelope" }],
+      "properties": {
+        "kind": { "const": "event" },
+        "type": { "const": "pet.snapshot" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["generation", "character", "actions", "visible", "interaction_locked"],
+          "properties": {
+            "generation": { "$ref": "#/$defs/generation" },
+            "character": { "type": "string", "maxLength": 128 },
+            "visible": { "type": "boolean" },
+            "interaction_locked": { "type": "boolean", "description": "拖拽/下落期间为 true。" },
+            "actions": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/action_id" },
+              "maxItems": 512,
+              "description": "当前角色可用动作白名单；Python 只能在其中挑选。"
+            }
+          }
+        }
+      }
+    },
+    "pet_event": {
+      "description": "C++ → Python，低频语义事件。",
+      "allOf": [{ "$ref": "#/$defs/envelope" }],
+      "properties": {
+        "kind": { "const": "event" },
+        "type": { "const": "pet.event" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "generation"],
+          "properties": {
+            "name": {
+              "type": "string",
+              "enum": ["click", "drag_start", "drag_end", "action_finished", "hidden", "shown", "character_changed"],
+              "description": "未知名称忽略，不触发默认动作。"
+            },
+            "generation": { "$ref": "#/$defs/generation" },
+            "action_id": { "$ref": "#/$defs/action_id" }
+          }
+        }
+      }
+    },
+    "agent_state_changed": {
+      "description": "Python → C++，标准状态变化，仅用于展示与记录，不直接触发动画。",
+      "allOf": [{ "$ref": "#/$defs/envelope" }],
+      "properties": {
+        "kind": { "const": "event" },
+        "type": { "const": "agent.state_changed" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["agent", "state", "generation", "config_revision"],
+          "properties": {
+            "agent": { "$ref": "#/$defs/agent_key" },
+            "state": { "$ref": "#/$defs/agent_state" },
+            "generation": { "$ref": "#/$defs/generation" },
+            "config_revision": { "$ref": "#/$defs/config_revision" },
+            "tool": { "type": "string", "maxLength": 128 }
+          }
+        }
+      }
+    },
+    "behavior_propose": {
+      "description": "Python → C++，行为建议（request，需要 behavior.result 回执）。C++ 决定是否允许执行。",
+      "allOf": [{ "$ref": "#/$defs/envelope" }],
+      "properties": {
+        "kind": { "const": "request" },
+        "type": { "const": "behavior.propose" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["action_id", "generation", "config_revision"],
+          "properties": {
+            "action_id": { "$ref": "#/$defs/action_id" },
+            "generation": { "$ref": "#/$defs/generation" },
+            "config_revision": { "$ref": "#/$defs/config_revision" },
+            "ttl_ms": { "type": "integer", "minimum": 1, "maximum": 30000, "default": 2000 },
+            "agent": { "$ref": "#/$defs/agent_key" },
+            "bubble": { "$ref": "#/$defs/bubble" }
+          }
+        }
+      }
+    },
+    "behavior_result": {
+      "description": "C++ → Python，行为建议的执行结果。request_id 与建议的 request_id 一致。",
+      "allOf": [{ "$ref": "#/$defs/envelope" }],
+      "properties": {
+        "kind": { "const": "response" },
+        "type": { "const": "behavior.result" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status"],
+          "properties": {
+            "status": { "type": "string", "enum": ["accepted", "rejected", "expired"] },
+            "reason": {
+              "type": "string",
+              "maxLength": 64,
+              "description": "accepted 时缺省；否则为 interaction_locked / generation_mismatch / revision_mismatch / unknown_action / bubble_busy / channel_unhealthy / not_ready 之一。"
+            }
+          }
+        }
+      }
+    },
+    "config_patch_request": {
+      "description": "Python → C++，白名单配置修改请求。C++ 校验 revision 后写盘。",
+      "allOf": [{ "$ref": "#/$defs/envelope" }],
+      "properties": {
+        "kind": { "const": "request" },
+        "type": { "const": "config.patch_request" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["expected_revision", "patch"],
+          "properties": {
+            "expected_revision": { "$ref": "#/$defs/config_revision" },
+            "patch": {
+              "type": "object",
+              "description": "仅允许 agent_link 下的白名单键；其余键被拒绝。",
+              "additionalProperties": true
+            }
+          }
+        }
+      }
+    },
+    "config_patch_result": {
+      "description": "C++ → Python，配置修改结果。",
+      "allOf": [{ "$ref": "#/$defs/envelope" }],
+      "properties": {
+        "kind": { "const": "response" },
+        "type": { "const": "config.patch_result" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status"],
+          "properties": {
+            "status": { "type": "string", "enum": ["applied", "rejected"] },
+            "reason": { "type": "string", "maxLength": 64 },
+            "revision": { "$ref": "#/$defs/config_revision" }
+          }
+        }
+      }
+    },
+    "runtime_ping": {
+      "description": "双向存活检查。C++ → Python 为 request，Python → C++ 为 event。",
+      "allOf": [{ "$ref": "#/$defs/envelope" }],
+      "properties": {
+        "type": { "const": "runtime.ping" },
+        "payload": { "type": "object", "additionalProperties": false, "properties": {} }
+      }
+    },
+    "runtime_pong": {
+      "description": "双向存活应答，request_id 与对应 ping 一致。",
+      "allOf": [{ "$ref": "#/$defs/envelope" }],
+      "properties": {
+        "type": { "const": "runtime.pong" },
+        "payload": { "type": "object", "additionalProperties": false, "properties": {} }
+      }
+    },
+    "runtime_shutdown": {
+      "description": "C++ → Python，要求停止订阅、退出调度并关闭进程。是 event 而非 request：Worker 进程退出本身就是回执，不需要也没有可返回的结果，留一个悬挂的 request_id 只会让宿主多等一个超时。",
+      "allOf": [{ "$ref": "#/$defs/envelope" }],
+      "properties": {
+        "kind": { "const": "event" },
+        "type": { "const": "runtime.shutdown" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "timeout_ms": { "type": "integer", "minimum": 0, "maximum": 2000, "default": 2000 }
+          }
+        }
+      }
+    },
+    "unsupported_message": {
+      "description": "任一方向在无法处理请求时返回。绝不能因此触发默认动作。",
+      "allOf": [{ "$ref": "#/$defs/envelope" }],
+      "properties": {
+        "kind": { "const": "response" },
+        "type": { "const": "runtime.unsupported_message" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reason"],
+          "properties": {
+            "reason": {
+              "type": "string",
+              "enum": ["unknown_type", "invalid_envelope", "unsupported_version", "payload_too_large", "unsupported_field"]
+            },
+            "detail": { "type": "string", "maxLength": 128 }
+          }
+        }
+      }
+    }
+  },
+  "anyOf": [
+    { "$ref": "#/$defs/runtime_hello" },
+    { "$ref": "#/$defs/runtime_ready" },
+    { "$ref": "#/$defs/config_snapshot" },
+    { "$ref": "#/$defs/pet_snapshot" },
+    { "$ref": "#/$defs/pet_event" },
+    { "$ref": "#/$defs/agent_state_changed" },
+    { "$ref": "#/$defs/behavior_propose" },
+    { "$ref": "#/$defs/behavior_result" },
+    { "$ref": "#/$defs/config_patch_request" },
+    { "$ref": "#/$defs/config_patch_result" },
+    { "$ref": "#/$defs/runtime_ping" },
+    { "$ref": "#/$defs/runtime_pong" },
+    { "$ref": "#/$defs/runtime_shutdown" },
+    { "$ref": "#/$defs/unsupported_message" }
+  ]
+}

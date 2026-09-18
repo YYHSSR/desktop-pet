@@ -1,0 +1,16 @@
+{
+  "protocol_version": 1,
+  "session_id": "sess-20260918-0001",
+  "seq": 2,
+  "kind": "event",
+  "type": "pet.snapshot",
+  "pet_id": "main",
+  "request_id": null,
+  "payload": {
+    "generation": 7,
+    "character": "shenshen",
+    "visible": true,
+    "interaction_locked": false,
+    "actions": ["idle/待机", "random/写代码", "turn/转身", "move/走动"]
+  }
+}

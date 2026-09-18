@@ -1,0 +1,5 @@
+{"event": "Stop"}
+{"event": "PreToolUse", "tool": "bash"}
+{"state": "thinking"}
+not json at all
+{"event": "某Agent私有事件"}

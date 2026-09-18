@@ -1,0 +1,21 @@
+{
+  "protocol_version": 1,
+  "session_id": "sess-20260918-0001",
+  "seq": 2,
+  "kind": "request",
+  "type": "behavior.propose",
+  "pet_id": "main",
+  "request_id": "prop-myagent-1",
+  "payload": {
+    "action_id": "random/写代码",
+    "generation": 7,
+    "config_revision": 12,
+    "ttl_ms": 2000,
+    "agent": "myagent",
+    "bubble": {
+      "text": "干完活啦，去看看成果吧～",
+      "important": true,
+      "duration_ms": 4500
+    }
+  }
+}

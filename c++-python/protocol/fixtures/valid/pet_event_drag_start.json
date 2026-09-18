@@ -1,0 +1,13 @@
+{
+  "protocol_version": 1,
+  "session_id": "sess-20260918-0001",
+  "seq": 3,
+  "kind": "event",
+  "type": "pet.event",
+  "pet_id": "main",
+  "request_id": null,
+  "payload": {
+    "name": "drag_start",
+    "generation": 8
+  }
+}

@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pet-worker"
+version = "0.1.0"
+description = "Desktop Pet 混合架构的 Python 业务 Worker：只处理低频业务事件，不依赖任何 GUI 框架"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+# 运行期只允许标准库：不得引入 PySide6 / Pillow / imageio-ffmpeg。
+# 这是架构约束，不是偏好——多一个 GUI 依赖就会把渲染与交互重新拉回 Python。
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4"]
+
+[project.scripts]
+pet-worker = "pet_worker.__main__:run"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

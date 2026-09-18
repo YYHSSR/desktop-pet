@@ -1,0 +1,29 @@
+{
+  "protocol_version": 1,
+  "session_id": "sess-20260918-0001",
+  "seq": 1,
+  "kind": "event",
+  "type": "config.snapshot",
+  "pet_id": "main",
+  "request_id": null,
+  "payload": {
+    "revision": 12,
+    "agent_backend": "python",
+    "policy": {
+      "notify_state": false,
+      "notify_done": true,
+      "notify_activity": false,
+      "min_interval_ms": 2000
+    },
+    "agents": {
+      "myagent": {
+        "enabled": true,
+        "kind": "custom",
+        "display_name": "我的助手",
+        "events_path": "~/.myagent/events.jsonl",
+        "busy_agents": ["myagent.exe"],
+        "thinking_text": "让我想想…"
+      }
+    }
+  }
+}

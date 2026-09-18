@@ -1,0 +1,297 @@
+{
+  "description": "字节流分帧契约。C++（ProtocolCodec）与 Python（pet_worker.transport）必须共用同一份用例并得到相同结果。用例不依赖任何具体实现的缓冲区大小假设。",
+  "max_message_bytes": 65536,
+  "rules": {
+    "framing": "累积字节 -> 先在缓冲中扫描 \\n -> 取出整行 -> 保留半包。整行字节完整后才做 UTF-8 解码。",
+    "check_order": "先判断是否存在 \\n。存在则取整行并单独校验该行长度；不存在时才用缓冲总长度判断是否超限。",
+    "line_ending": "行尾 \\n 被消费；若 \\n 前紧邻 \\r（CRLF）则一并消费。",
+    "blank_line": "空行（去掉行尾后长度为 0）直接跳过，不计为错误。",
+    "complete_line_too_large": "完整行（已见 \\n）超过 max_message_bytes：丢弃该行并记 payload_too_large，不中止会话。",
+    "unterminated_too_large": "缓冲已超过 max_message_bytes 且仍无 \\n：立即中止本次协议会话（abort=true），防止无限累积。",
+    "invalid_utf8": "整行 UTF-8 解码失败：记 invalid_utf8 并丢弃该行，不中止会话（后续行仍可解析）。",
+    "invalid_json": "整行 JSON 解析失败：记 invalid_json 并丢弃该行，不中止会话。",
+    "seq": "同一 session 内同方向重复 seq 视为重放，记 duplicate_dropped 并忽略。",
+    "unsupported_version": "protocol_version 不等于 1：记 unsupported_version 且不投递该消息，不中止会话；宿主据此降级为 native。",
+    "unknown_type": "信封合法但 type 未定义：加入 unsupported 列表，绝不触发默认动作。",
+    "unknown_field": "payload 出现未定义字段或枚举越界：整条消息拒绝（记 invalid_envelope），不得部分应用。",
+    "request_id_coupling": "kind 为 request / response 时 request_id 必须为非空字符串；kind 为 event 时 request_id 必须为 null。behavior.propose 需要 behavior.result 回执，因此是 request 而非 event。",
+    "eof": "EOF 时缓冲区残留半行：记 truncated_on_eof 并丢弃，绝不当整行解析。"
+  },
+  "model": {
+    "stream": "完整字节流，由若干 part 顺次拼接。part 为 { \"text\": \"<原样>\", \"repeat\": <可选次数> }（按 UTF-8 编码）或 { \"bytes\": [<0-255>, ...] }（逐字节，用于构造非法 UTF-8）。JSON 字符串中的 \\r \\n 会还原为真实字节。",
+    "split_points": "可选。对 stream 做切割以模拟多次 readyRead 的到达边界。每一项为 { \"byte_offset\": N } 或 { \"after_substring\": \"<按字节搜索的子串>\", \"offset\": N }（子串首次出现位置之后偏移 N 字节，N=1 可切进多字节字符内部）。省略表示一次到达。",
+    "require_mid_codepoint_split": "可选 true：断言至少一个切点落在 UTF-8 多字节字符内部（切点处字节为 0x80-0xBF）。若切点算错，用例必须失败。"
+  },
+  "expect_model": {
+    "messages": "按顺序投递成功的消息 type 列表。",
+    "errors": "[{ \"kind\": <错误码>, \"count\": N }]，按 kind 聚合。",
+    "unsupported": "被识别但未定义的消息 type 列表。",
+    "duplicates_dropped": "被判定为重放的整数字数。",
+    "abort": "是否必须中止本次协议会话。"
+  },
+  "error_kinds": [
+    "invalid_json",
+    "invalid_utf8",
+    "invalid_envelope",
+    "payload_too_large",
+    "unsupported_version",
+    "truncated_on_eof"
+  ],
+  "cases": [
+    {
+      "name": "single_line_single_chunk",
+      "description": "一次读取正好一条完整消息。",
+      "stream": [
+        { "text": "{\"protocol_version\":1,\"session_id\":\"sess-0001\",\"seq\":0,\"kind\":\"request\",\"type\":\"runtime.ping\",\"pet_id\":\"main\",\"request_id\":\"p1\",\"payload\":{}}\n" }
+      ],
+      "expect": {
+        "messages": ["runtime.ping"],
+        "errors": [],
+        "unsupported": [],
+        "duplicates_dropped": 0,
+        "abort": false
+      }
+    },
+    {
+      "name": "two_lines_one_chunk",
+      "description": "连包：一次读取包含两条完整消息。",
+      "stream": [
+        { "text": "{\"protocol_version\":1,\"session_id\":\"sess-0001\",\"seq\":0,\"kind\":\"request\",\"type\":\"runtime.ping\",\"pet_id\":\"main\",\"request_id\":\"p1\",\"payload\":{}}\n{\"protocol_version\":1,\"session_id\":\"sess-0001\",\"seq\":0,\"kind\":\"response\",\"type\":\"runtime.pong\",\"pet_id\":\"main\",\"request_id\":\"p1\",\"payload\":{}}\n" }
+      ],
+      "expect": {
+        "messages": ["runtime.ping", "runtime.pong"],
+        "errors": [],
+        "unsupported": [],
+        "duplicates_dropped": 0,
+        "abort": false
+      }
+    },
+    {
+      "name": "half_packet_then_rest",
+      "description": "半包：一条消息被切成两段到达。",
+      "stream": [
+        { "text": "{\"protocol_version\":1,\"session_id\":\"sess-0001\",\"seq\":0,\"kind\":\"request\",\"type\":\"runtime.ping\",\"pet_id\":\"main\",\"request_id\":\"p1\",\"payload\":{}}\n" }
+      ],
+      "split_points": [
+        { "after_substring": "\"kind\":\"request\",", "offset": 0 }
+      ],
+      "expect": {
+        "messages": ["runtime.ping"],
+        "errors": [],
+        "unsupported": [],
+        "duplicates_dropped": 0,
+        "abort": false
+      }
+    },
+    {
+      "name": "split_inside_multibyte_char",
+      "description": "UTF-8 跨读取边界：切点落在中文字符编码内部，且必须只解出一条消息。",
+      "stream": [
+        { "text": "{\"protocol_version\":1,\"session_id\":\"sess-0001\",\"seq\":1,\"kind\":\"request\",\"type\":\"behavior.propose\",\"pet_id\":\"main\",\"request_id\":\"prop-1\",\"payload\":{\"action_id\":\"random/写代码\",\"generation\":7,\"config_revision\":12,\"bubble\":{\"text\":\"干完活啦～\",\"important\":true,\"duration_ms\":4500}}}\n" }
+      ],
+      "split_points": [
+        { "after_substring": "\"action_id\":\"random/", "offset": 1 },
+        { "after_substring": "干", "offset": 1 }
+      ],
+      "require_mid_codepoint_split": true,
+      "expect": {
+        "messages": ["behavior.propose"],
+        "errors": [],
+        "unsupported": [],
+        "duplicates_dropped": 0,
+        "abort": false
+      }
+    },
+    {
+      "name": "split_immediately_before_newline",
+      "description": "切点正好在换行符之前，半行缓冲不得被当成整行解析。",
+      "stream": [
+        { "text": "{\"protocol_version\":1,\"session_id\":\"sess-0001\",\"seq\":0,\"kind\":\"request\",\"type\":\"runtime.ping\",\"pet_id\":\"main\",\"request_id\":\"p1\",\"payload\":{}}\n" }
+      ],
+      "split_points": [
+        { "after_substring": "\"payload\":{}}", "offset": 0 }
+      ],
+      "expect": {
+        "messages": ["runtime.ping"],
+        "errors": [],
+        "unsupported": [],
+        "duplicates_dropped": 0,
+        "abort": false
+      }
+    },
+    {
+      "name": "crlf_line_ending",
+      "description": "Windows 风格 CRLF 行尾必须被容忍，CR 不计入消息内容。",
+      "stream": [
+        { "text": "{\"protocol_version\":1,\"session_id\":\"sess-0001\",\"seq\":0,\"kind\":\"request\",\"type\":\"runtime.ping\",\"pet_id\":\"main\",\"request_id\":\"p1\",\"payload\":{}}\r\n" }
+      ],
+      "expect": {
+        "messages": ["runtime.ping"],
+        "errors": [],
+        "unsupported": [],
+        "duplicates_dropped": 0,
+        "abort": false
+      }
+    },
+    {
+      "name": "blank_lines_ignored",
+      "description": "空行与多余换行不得产生错误或消息。",
+      "stream": [
+        { "text": "\n\n{\"protocol_version\":1,\"session_id\":\"sess-0001\",\"seq\":0,\"kind\":\"request\",\"type\":\"runtime.ping\",\"pet_id\":\"main\",\"request_id\":\"p1\",\"payload\":{}}\n\n" }
+      ],
+      "expect": {
+        "messages": ["runtime.ping"],
+        "errors": [],
+        "unsupported": [],
+        "duplicates_dropped": 0,
+        "abort": false
+      }
+    },
+    {
+      "name": "invalid_json_isolated",
+      "description": "非法 JSON 行被隔离丢弃，其后的合法行仍必须被解析。",
+      "stream": [
+        { "text": "{\"broken\":\n{\"protocol_version\":1,\"session_id\":\"sess-0001\",\"seq\":0,\"kind\":\"request\",\"type\":\"runtime.ping\",\"pet_id\":\"main\",\"request_id\":\"p1\",\"payload\":{}}\n" }
+      ],
+      "expect": {
+        "messages": ["runtime.ping"],
+        "errors": [{ "kind": "invalid_json", "count": 1 }],
+        "unsupported": [],
+        "duplicates_dropped": 0,
+        "abort": false
+      }
+    },
+    {
+      "name": "invalid_utf8_then_valid",
+      "description": "整行不是合法 UTF-8 时丢弃该行，不影响后续消息。",
+      "stream": [
+        { "bytes": [123, 34, 97, 34, 58, 34, 255, 254, 34, 125, 10] },
+        { "text": "{\"protocol_version\":1,\"session_id\":\"sess-0001\",\"seq\":0,\"kind\":\"request\",\"type\":\"runtime.ping\",\"pet_id\":\"main\",\"request_id\":\"p1\",\"payload\":{}}\n" }
+      ],
+      "expect": {
+        "messages": ["runtime.ping"],
+        "errors": [{ "kind": "invalid_utf8", "count": 1 }],
+        "unsupported": [],
+        "duplicates_dropped": 0,
+        "abort": false
+      }
+    },
+    {
+      "name": "unknown_type_never_acts",
+      "description": "信封合法但 type 未定义：只记录为 unsupported，绝不触发默认动作。",
+      "stream": [
+        { "text": "{\"protocol_version\":1,\"session_id\":\"sess-0001\",\"seq\":5,\"kind\":\"event\",\"type\":\"agent.magic\",\"pet_id\":\"main\",\"request_id\":null,\"payload\":{}}\n" }
+      ],
+      "expect": {
+        "messages": [],
+        "errors": [],
+        "unsupported": ["agent.magic"],
+        "duplicates_dropped": 0,
+        "abort": false
+      }
+    },
+    {
+      "name": "unknown_state_rejected",
+      "description": "枚举越界：state=dance 不在六类标准状态内，整条消息拒绝。",
+      "stream": [
+        { "text": "{\"protocol_version\":1,\"session_id\":\"sess-0001\",\"seq\":1,\"kind\":\"event\",\"type\":\"agent.state_changed\",\"pet_id\":\"main\",\"request_id\":null,\"payload\":{\"agent\":\"myagent\",\"state\":\"dance\",\"generation\":7,\"config_revision\":12}}\n" }
+      ],
+      "expect": {
+        "messages": [],
+        "errors": [{ "kind": "invalid_envelope", "count": 1 }],
+        "unsupported": [],
+        "duplicates_dropped": 0,
+        "abort": false
+      }
+    },
+    {
+      "name": "unsupported_protocol_version",
+      "description": "主版本不兼容：不投递消息、不中止会话，宿主据此降级为 native。",
+      "stream": [
+        { "text": "{\"protocol_version\":2,\"session_id\":\"sess-0001\",\"seq\":0,\"kind\":\"response\",\"type\":\"runtime.ready\",\"pet_id\":\"main\",\"request_id\":\"h1\",\"payload\":{\"worker_version\":\"9.9.9\",\"capabilities\":[]}}\n" }
+      ],
+      "expect": {
+        "messages": [],
+        "errors": [{ "kind": "unsupported_version", "count": 1 }],
+        "unsupported": [],
+        "duplicates_dropped": 0,
+        "abort": false
+      }
+    },
+    {
+      "name": "duplicate_seq_dropped",
+      "description": "同 session 同方向重复 seq：第二条视为重放被忽略。",
+      "stream": [
+        { "text": "{\"protocol_version\":1,\"session_id\":\"sess-0001\",\"seq\":0,\"kind\":\"request\",\"type\":\"runtime.ping\",\"pet_id\":\"main\",\"request_id\":\"p1\",\"payload\":{}}\n{\"protocol_version\":1,\"session_id\":\"sess-0001\",\"seq\":0,\"kind\":\"request\",\"type\":\"runtime.ping\",\"pet_id\":\"main\",\"request_id\":\"p2\",\"payload\":{}}\n" }
+      ],
+      "expect": {
+        "messages": ["runtime.ping"],
+        "errors": [],
+        "unsupported": [],
+        "duplicates_dropped": 1,
+        "abort": false
+      }
+    },
+    {
+      "name": "missing_required_field_rejected",
+      "description": "缺少 envelope 必填字段 request_id：整条消息拒绝，不做部分应用。",
+      "stream": [
+        { "text": "{\"protocol_version\":1,\"session_id\":\"sess-0001\",\"seq\":0,\"kind\":\"request\",\"type\":\"runtime.hello\",\"pet_id\":\"main\",\"payload\":{\"host_version\":\"0.9.0\",\"required_capabilities\":[]}}\n" }
+      ],
+      "expect": {
+        "messages": [],
+        "errors": [{ "kind": "invalid_envelope", "count": 1 }],
+        "unsupported": [],
+        "duplicates_dropped": 0,
+        "abort": false
+      }
+    },
+    {
+      "name": "oversize_line_terminated",
+      "description": "完整行超过 max_message_bytes 但在同一到达段内已带换行：丢弃该行记 payload_too_large，会话继续。",
+      "stream": [
+        { "text": "x", "repeat": 70000 },
+        { "text": "\n" },
+        { "text": "{\"protocol_version\":1,\"session_id\":\"sess-0001\",\"seq\":0,\"kind\":\"request\",\"type\":\"runtime.ping\",\"pet_id\":\"main\",\"request_id\":\"p1\",\"payload\":{}}\n" }
+      ],
+      "expect": {
+        "messages": ["runtime.ping"],
+        "errors": [{ "kind": "payload_too_large", "count": 1 }],
+        "unsupported": [],
+        "duplicates_dropped": 0,
+        "abort": false
+      }
+    },
+    {
+      "name": "oversize_unterminated_aborts_session",
+      "description": "缓冲超过上限且始终没有换行：必须立即中止本次协议会话，防止无限累积。",
+      "stream": [
+        { "text": "x", "repeat": 70000 }
+      ],
+      "split_points": [
+        { "byte_offset": 1000 }
+      ],
+      "expect": {
+        "messages": [],
+        "errors": [{ "kind": "payload_too_large", "count": 1 }],
+        "unsupported": [],
+        "duplicates_dropped": 0,
+        "abort": true
+      }
+    },
+    {
+      "name": "eof_with_partial_line_discarded",
+      "description": "EOF 时残留半行必须丢弃，不得把半行当整行解析。",
+      "stream": [
+        { "text": "{\"protocol_version\":1,\"session_id\":\"sess-0001\",\"seq\":0,\"kind\":\"request\",\"type\":\"runtime.ping\"" }
+      ],
+      "expect": {
+        "messages": [],
+        "errors": [{ "kind": "truncated_on_eof", "count": 1 }],
+        "unsupported": [],
+        "duplicates_dropped": 0,
+        "abort": false
+      }
+    }
+  ]
+}
